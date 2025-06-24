@@ -1,10 +1,13 @@
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify
+from flask_cors import CORS # Import the CORS library
 
 # --- Flask App Initialization ---
 # Create an instance of the Flask class. This is our web application.
 app = Flask(__name__)
+# Enable CORS for all routes. This will add the necessary headers to allow cross-origin requests.
+CORS(app)
 
 # --- Web Scraping Function ---
 # This function contains the logic to scrape the data from the website.
@@ -72,7 +75,7 @@ def scrape_share_prices():
         raise ValueError(f"Error processing the website's HTML content: {e}")
 
 
- 
+# --- API Endpoint ---
 @app.route('/api/v1/share-prices', methods=['GET'])
 def get_share_prices():
     """
@@ -102,5 +105,6 @@ def get_share_prices():
 # --- Main execution block ---
 # This code runs only when the script is executed directly (not when imported).
 if __name__ == '__main__':
-   
+    # Before running, make sure you have Flask-Cors installed:
+    # pip install Flask-Cors
     app.run(debug=True, host='0.0.0.0', port=5000)
