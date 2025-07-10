@@ -1,110 +1,104 @@
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify
-from flask_cors import CORS # Import the CORS library
+from flask_cors import CORS
+from apscheduler.schedulers.background import BackgroundScheduler # Import APScheduler
+import logging
+
+# --- Configure logging ---
+# It's good practice to log scheduler activity
+logging.basicConfig(level=logging.INFO)
 
 # --- Flask App Initialization ---
-# Create an instance of the Flask class. This is our web application.
 app = Flask(__name__)
-# Enable CORS for all routes. This will add the necessary headers to allow cross-origin requests.
 CORS(app)
 
-# --- Web Scraping Function ---
-# This function contains the logic to scrape the data from the website.
+# --- Web Scraping Function (Your original function) ---
 def scrape_share_prices():
     """
     Scrapes the 'Today Share Price' table from sharesansar.com and returns it as a list of dictionaries.
     """
-    # URL and headers for the request
     url = 'https://www.sharesansar.com/today-share-price'
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
     }
-
-    # Make the GET request to the website
-    # A try-except block is used to handle potential network or parsing errors gracefully.
     try:
-        req = requests.get(url, headers=headers, timeout=10) # Added a timeout for safety
-        req.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-
-        # Parse the HTML content of the page
+        req = requests.get(url, headers=headers, timeout=10)
+        req.raise_for_status()
         soup = BeautifulSoup(req.text, 'html.parser')
-
-        # Find the main table element
         data_table = soup.find('table', id='headFixed')
         if not data_table:
-            # If the specific table is not found, raise an error.
             raise ValueError("Could not find the main data table with id='headFixed'.")
-
-        # --- Find and process the table header ---
         thead = data_table.find('thead')
         if not thead:
             raise ValueError("Could not find the table header (<thead>).")
-            
-        # Extract header titles from th tags. These will become the keys in our JSON objects.
-        # A list comprehension provides a concise way to create the list.
         header = [th.get_text(strip=True) for th in thead.find_all('th')]
-        
-        # --- Find and process the table body ---
         tbody = data_table.find('tbody')
         if not tbody:
             raise ValueError("Could not find the table body (<tbody>).")
-
-        # --- Extract data and structure it as a list of dictionaries ---
-        # This is a more API-friendly format than separate lists for header and data.
         all_rows = []
-        # Iterate over each table row (tr) in the table body
         for row in tbody.find_all('tr'):
-            # Get all cell (td) texts for the current row
             cols = [ele.get_text(strip=True) for ele in row.find_all('td')]
-            # Create a dictionary by zipping the header and the row's columns together
-            # This pairs each data point with its corresponding header (e.g., {'Symbol': 'NABIL', 'LTP': '550'})
             row_dict = dict(zip(header, cols))
             all_rows.append(row_dict)
-            
         return all_rows
-
-    # Catch specific exceptions for better error handling
     except requests.exceptions.RequestException as e:
         print(f"Error making the request: {e}")
-        # Re-raise with a custom message for the API response
         raise ConnectionError(f"Failed to retrieve data from the website: {e}")
     except ValueError as e:
         print(f"Error parsing the HTML: {e}")
-        # Re-raise with a custom message
         raise ValueError(f"Error processing the website's HTML content: {e}")
 
 
-# --- API Endpoint ---
+# --- Health Check Function ---
+def health_check():
+    """
+    Internal function to ping the app itself to keep it from sleeping.
+    """
+    try:
+        # NOTE: This URL needs to point to your service. 
+        # On Render's free tier, the internal host is typically '0.0.0.0' and port is 10000.
+        # However, for a self-ping, use the service's public URL if available, or localhost.
+        # Let's ping the new /health endpoint.
+        r = requests.get('http://127.0.0.1:5000/health')
+        r.raise_for_status() # Raise an exception for bad status codes
+        logging.info(f"Health check ping successful: {r.status_code}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Health check failed: {e}")
+
+# --- API Endpoints ---
+@app.route('/health', methods=['GET'])
+def health():
+    """
+    A lightweight endpoint that the scheduler can hit.
+    It doesn't perform any heavy operations like scraping.
+    """
+    return jsonify({"status": "ok"}), 200
+
 @app.route('/api/v1/share-prices', methods=['GET'])
 def get_share_prices():
     """
     API endpoint to get the latest share prices.
     """
     try:
-        # Call the scraping function to get the data
         data = scrape_share_prices()
-        
-        # Check if data was actually returned
         if not data:
-            # Return a 404 Not Found error if no data could be scraped
             return jsonify({"error": "No data found on the page."}), 404
-            
-        # Use Flask's jsonify to convert our list of dictionaries into a JSON response.
-        # This also sets the correct Content-Type header to 'application/json'.
         return jsonify(data)
-        
     except (ConnectionError, ValueError) as e:
-        # If any of our custom errors are raised during scraping, return a 500 Internal Server Error.
-        # This tells the API consumer that something went wrong on our end.
         return jsonify({"error": str(e)}), 500
     except Exception as e:
-        # A general catch-all for any other unexpected errors.
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
 # --- Main execution block ---
-# This code runs only when the script is executed directly (not when imported).
 if __name__ == '__main__':
-    # Before running, make sure you have Flask-Cors installed:
-    # pip install Flask-Cors
+    # --- Initialize and start the scheduler ---
+    scheduler = BackgroundScheduler()
+    # Schedule the health_check function to run every 5 minutes
+    scheduler.add_job(func=health_check, trigger="interval", minutes=5)
+    scheduler.start()
+    
+    # Ensure the app runs on the port Render expects, or 5000 for local dev
+    # For Render, you might need to use port 10000
+    # port = int(os.environ.get('PORT', 5000))
     app.run(debug=True, host='0.0.0.0', port=5000)
