@@ -103,23 +103,18 @@ def get_portfolio_summary():
     Merges portfolio data with live market prices to provide a full summary.
     """
     try:
-        # Step 1: Get portfolio and market data
+        # ... (Steps 1, 2, and 3 are unchanged) ...
         portfolio_holdings = worksheet.get_all_records()
         market_data_list = scrape_share_prices()
-
-        # Step 2: Convert market data to a dictionary for fast lookups (Symbol -> data)
         market_prices = {item['Symbol']: item for item in market_data_list}
 
-        # Step 3: Calculate the total purchase value of the portfolio for weight calculation
         total_portfolio_purchase_value = sum(
             stock.get('quantity', 0) * stock.get('purchasePrice', 0)
             for stock in portfolio_holdings
         )
-        # Avoid division by zero if portfolio is empty
         if total_portfolio_purchase_value == 0:
             total_portfolio_purchase_value = 1 
 
-        # Step 4: Process each stock holding
         summary_list = []
         for stock in portfolio_holdings:
             symbol = stock.get('scrip')
@@ -128,32 +123,28 @@ def get_portfolio_summary():
 
             purchase_price = stock.get('purchasePrice', 0)
             quantity = stock.get('quantity', 0)
+            sector = stock.get('sector', 'N/A') # <- ADDED THIS LINE
             
-            # Find the corresponding market data for the current stock
             stock_market_data = market_prices.get(symbol)
             
-            # --- Initialize values ---
+            # ... (the rest of the logic for ltp, calculations, etc. is unchanged) ...
             ltp = 0.0
             week_high_low = "N/A"
 
-            # --- Safely extract and convert data if market data exists ---
             if stock_market_data:
                 try:
-                    # Remove commas from numbers and convert to float
                     ltp = float(stock_market_data.get('LTP', '0').replace(',', ''))
                 except (ValueError, AttributeError):
-                    ltp = 0.0 # Default to 0 if data is invalid
+                    ltp = 0.0
                 
                 high = stock_market_data.get('52 Weeks High', 'N/A')
                 low = stock_market_data.get('52 Weeks Low', 'N/A')
                 week_high_low = f"{high} / {low}"
 
-            # --- Perform calculations ---
             purchase_value = purchase_price * quantity
-            current_value = ltp * quantity if ltp > 0 else 0 # <- ADDED CALCULATION
+            current_value = ltp * quantity if ltp > 0 else 0
             profit_amount = current_value - purchase_value
             
-            # Avoid division by zero for profit percentage
             if purchase_price > 0 and ltp > 0:
                 profit_percentage = (profit_amount / purchase_value) * 100
             else:
@@ -161,13 +152,13 @@ def get_portfolio_summary():
 
             weight_percentage = (purchase_value / total_portfolio_purchase_value) * 100
 
-            # --- Construct the final JSON object for this stock ---
             summary_list.append({
                 "Script": symbol,
+                "Sector": sector, # <- ADDED FIELD
                 "quantity": quantity,
                 "purchase price": purchase_price,
                 "LTP": ltp,
-                "Current Value": round(current_value, 2), # <- ADDED FIELD
+                "Current Value": round(current_value, 2),
                 "52 week high/low": week_high_low,
                 "Profit amount": round(profit_amount, 2),
                 "profit percentage": f"{round(profit_percentage, 2)}%",
