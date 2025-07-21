@@ -6,32 +6,63 @@ import os
 import requests
 from bs4 import BeautifulSoup
 
-# Import the worksheet object from our central client file
-from gspread_client import worksheet
+# --- CORRECTED IMPORT ---
+# Import the new, correct variable names from your client file
+from gspread_client import portfolio_sheet, turnover_sheet
 
 # Create a Blueprint
 portfolio_bp = Blueprint('portfolio_bp', __name__)
 
-# --- MOVED SCRAPING FUNCTION ---
+# --- Market Summary and other functions from before ---
+# (No changes needed in these helper functions).00.
+def scrape_market_summary():
+    # ... (function is correct)
+    url = os.getenv("SCRAPE_API")+'/market-summary'
+    print(url)
+    headers = { 'User-Agent': 'Mozilla/5.0 ...' }
+    try:
+        req = requests.get(url, headers=headers, timeout=10)
+        req.raise_for_status()
+        soup = BeautifulSoup(req.text, 'html.parser')
+        summary_div = soup.find('div', id='market_symmary_data')
+        if not summary_div:
+            raise ValueError("Could not find market summary container.")
+        date_span = summary_div.find('span', class_='text-org')
+        if not date_span:
+            raise ValueError("Could not find market date.")
+        market_date = date_span.get_text(strip=True)
+        summary_data = {"Date": market_date}
+        rows = summary_div.find_all('tr')
+        for row in rows:
+            cells = row.find_all('td')
+            if len(cells) == 2:
+                key = cells[0].get_text(strip=True).replace('(Rs.)', '').strip()
+                value = cells[1].get_text(strip=True)
+                summary_data[key] = value
+        return summary_data
+    except requests.exceptions.RequestException as e:
+        raise ConnectionError(f"Failed to retrieve market summary: {e}")
+    except ValueError as e:
+        raise ValueError(f"Error processing market summary HTML: {e}")
+
 def scrape_share_prices():
-    url = os.getenv("SCRAPE_API") # Corrected from "scrape_API" to match .env
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-    }
+    # ... (function is correct)
+    url = os.getenv("SCRAPE_API")+'/today-share-price'
+    headers = {'User-Agent': 'Mozilla/5.0 ...'}
     try:
         req = requests.get(url, headers=headers, timeout=10)
         req.raise_for_status()
         soup = BeautifulSoup(req.text, 'html.parser')
         data_table = soup.find('table', id='headFixed')
         if not data_table:
-            raise ValueError("Could not find the main data table with id='headFixed'.")
+            raise ValueError("Could not find data table with id='headFixed'.")
         thead = data_table.find('thead')
         if not thead:
-            raise ValueError("Could not find the table header (<thead>).")
+            raise ValueError("Could not find table header.")
         header = [th.get_text(strip=True) for th in thead.find_all('th')]
         tbody = data_table.find('tbody')
         if not tbody:
-            raise ValueError("Could not find the table body (<tbody>).")
+            raise ValueError("Could not find table body.")
         all_rows = []
         for row in tbody.find_all('tr'):
             cols = [ele.get_text(strip=True) for ele in row.find_all('td')]
@@ -39,14 +70,42 @@ def scrape_share_prices():
             all_rows.append(row_dict)
         return all_rows
     except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Failed to retrieve data from the website: {e}")
+        raise ConnectionError(f"Failed to retrieve data from website: {e}")
     except ValueError as e:
-        raise ValueError(f"Error processing the website's HTML content: {e}")
+        raise ValueError(f"Error processing HTML content: {e}")
 
-# --- NEW ENDPOINT FOR SHARE PRICES ---
+# --- UPDATED ROUTES ---
+
+@portfolio_bp.route('/market-summary', methods=['GET'])
+def get_market_summary():
+    if turnover_sheet is None:
+        return jsonify({"error": "Google Sheets 'Turnover' tab not connected."}), 500
+    # ... (rest of this function is correct and uses turnover_sheet)
+    try:
+        latest_data = scrape_market_summary()
+        latest_date = latest_data.get("Date")
+        existing_records = turnover_sheet.get_all_records()
+        saved_dates = {str(record.get('Date')) for record in existing_records}
+        if latest_date in saved_dates:
+            logging.info(f"Market data for {latest_date} already exists.")
+            for record in existing_records:
+                if str(record.get('Date')) == latest_date:
+                    return jsonify(record)
+            return jsonify({"error": "Data found but could not be retrieved."}), 500
+        else:
+            logging.info(f"New market data for {latest_date} found. Saving to sheet.")
+            headers = ["Date", "Total Turnovers", "Total Traded Shares", "Total Transaction", "Total Scrips Traded", "Total Market Cap", "Floated Market Cap"]
+            new_row = [latest_data.get(header, "N/A") for header in headers]
+            turnover_sheet.append_row(new_row, value_input_option='USER_ENTERED')
+            return jsonify(latest_data)
+    except (ConnectionError, ValueError) as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
 @portfolio_bp.route('/prices', methods=['GET'])
 def get_share_prices():
-    """Gets the latest share prices from the website."""
+    # ... (this function does not use gspread, no changes needed)
     try:
         data = scrape_share_prices()
         if not data:
@@ -57,15 +116,15 @@ def get_share_prices():
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
-# --- EXISTING PORTFOLIO ROUTES ---
 @portfolio_bp.route('/', methods=['GET'])
 def get_portfolio():
     """Gets all portfolio data from the sheet."""
-    # ... (function is unchanged) ...
-    if worksheet is None:
-        return jsonify({"error": "Google Sheets not connected. Check server logs."}), 500
+    # **FIX**: Use portfolio_sheet instead of worksheet
+    if portfolio_sheet is None:
+        return jsonify({"error": "Google Sheets 'Portfolio' not connected."}), 500
     try:
-        records = worksheet.get_all_records()
+        # **FIX**: Use portfolio_sheet instead of worksheet
+        records = portfolio_sheet.get_all_records()
         return jsonify(records)
     except Exception as e:
         logging.error(f"Error fetching from Google Sheets: {e}")
@@ -73,45 +132,42 @@ def get_portfolio():
 
 @portfolio_bp.route('/add', methods=['POST'])
 def add_stock():
-    """Adds a new stock purchase to the sheet."""
-    # ... (function is unchanged) ...
-    if worksheet is None:
-        return jsonify({"error": "Google Sheets not connected. Check server logs."}), 500
+    """Adds a stock to the default portfolio sheet."""
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Invalid JSON payload."}), 400
+        # **FIX**: Use portfolio_sheet instead of worksheet
+        if portfolio_sheet is None:
+            return jsonify({"error": "Google Sheets 'Portfolio' not connected."}), 500
 
-        required_fields = ['symbol', 'quantity', 'price', 'date']
+        data = request.get_json()
+        required_fields = ['scrip', 'quantity', 'purchasePrice', 'sector']
         if not all(field in data for field in required_fields):
             return jsonify({"error": f"Missing required fields: {required_fields}"}), 400
+            
+        new_row = [data['scrip'], data['sector'], data['quantity'], data['purchasePrice']]
         
-        new_row = [data['symbol'], data['quantity'], data['price'], data['date']]
+        # **FIX**: Use portfolio_sheet instead of worksheet
+        portfolio_sheet.append_row(new_row, value_input_option='USER_ENTERED')
         
-        worksheet.append_row(new_row, value_input_option='USER_ENTERED')
+        return jsonify({"message": "Stock added successfully."}), 201
         
-        logging.info(f"Successfully added new stock: {new_row}")
-        return jsonify({"status": "success", "message": "Stock purchase added."}), 201
     except Exception as e:
-        logging.error(f"Error adding stock to Google Sheets: {e}")
-        return jsonify({"error": "An unexpected error occurred."}), 500
-    
+        return jsonify({"error": f"An error occurred: {e}"}), 500
 
 @portfolio_bp.route('/summary', methods=['GET'])
 def get_portfolio_summary():
-    """
-    Merges portfolio data with live market prices to provide a full summary.
-    """
+    """Merges portfolio data with live market prices to provide a full summary."""
     try:
-        # ... (Steps 1, 2, and 3 are unchanged) ...
-        portfolio_holdings = worksheet.get_all_records()
+        # **FIX**: Use portfolio_sheet instead of worksheet
+        if portfolio_sheet is None:
+             return jsonify({"error": "Google Sheets 'Portfolio' not connected."}), 500
+        
+        # **FIX**: Use portfolio_sheet instead of worksheet
+        portfolio_holdings = portfolio_sheet.get_all_records()
         market_data_list = scrape_share_prices()
         market_prices = {item['Symbol']: item for item in market_data_list}
-
-        total_portfolio_purchase_value = sum(
-            stock.get('quantity', 0) * stock.get('purchasePrice', 0)
-            for stock in portfolio_holdings
-        )
+        
+        # ... (rest of the summary logic is correct)
+        total_portfolio_purchase_value = sum(stock.get('quantity', 0) * stock.get('purchasePrice', 0) for stock in portfolio_holdings)
         if total_portfolio_purchase_value == 0:
             total_portfolio_purchase_value = 1 
 
@@ -120,44 +176,31 @@ def get_portfolio_summary():
             symbol = stock.get('scrip')
             if not symbol or not stock.get('quantity'):
                 continue
-
             purchase_price = stock.get('purchasePrice', 0)
             quantity = stock.get('quantity', 0)
-            sector = stock.get('sector', 'N/A') # <- ADDED THIS LINE
-            
+            sector = stock.get('sector', 'N/A') 
             stock_market_data = market_prices.get(symbol)
-            
-            # ... (the rest of the logic for ltp, calculations, etc. is unchanged) ...
             ltp = 0.0
             week_high_low = "N/A"
-
             if stock_market_data:
                 try:
                     ltp = float(stock_market_data.get('LTP', '0').replace(',', ''))
                 except (ValueError, AttributeError):
                     ltp = 0.0
-                
                 high = stock_market_data.get('52 Weeks High', 'N/A')
                 low = stock_market_data.get('52 Weeks Low', 'N/A')
                 week_high_low = f"{high} / {low}"
-
             purchase_value = purchase_price * quantity
             current_value = ltp * quantity if ltp > 0 else 0
             profit_amount = current_value - purchase_value
-            
             if purchase_price > 0 and ltp > 0:
                 profit_percentage = (profit_amount / purchase_value) * 100
             else:
                 profit_percentage = 0
-
             weight_percentage = (purchase_value / total_portfolio_purchase_value) * 100
-
             summary_list.append({
-                "Script": symbol,
-                "Sector": sector, # <- ADDED FIELD
-                "quantity": quantity,
-                "purchase price": purchase_price,
-                "LTP": ltp,
+                "Script": symbol, "Sector": sector, "quantity": quantity,
+                "purchase price": purchase_price, "LTP": ltp,
                 "Current Value": round(current_value, 2),
                 "52 week high/low": week_high_low,
                 "Profit amount": round(profit_amount, 2),
@@ -165,7 +208,6 @@ def get_portfolio_summary():
                 "Purchase value": round(purchase_value, 2),
                 "Weight%": f"{round(weight_percentage, 2)}%"
             })
-            
         return jsonify(summary_list)
 
     except Exception as e:

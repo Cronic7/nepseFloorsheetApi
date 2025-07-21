@@ -8,8 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Initialize worksheet to None
-worksheet = None
+# Initialize worksheet variables to None
+portfolio_sheet = None
+turnover_sheet = None
 
 try:
     creds_json_str = os.getenv("GOOGLE_CREDENTIAL")
@@ -21,8 +22,20 @@ try:
     gc = gspread.service_account_from_dict(creds_dict)
     
     spreadsheet = gc.open_by_key(os.getenv("SPREADSHEET_ID"))
-    worksheet = spreadsheet.sheet1 # Assign the connected worksheet
-    logging.info("Successfully connected to Google Sheets.")
+    
+    # --- UPDATED SECTION ---
+    # Assign the 'Portfolio' sheet (or your primary data sheet)
+    # Using spreadsheet.sheet1 assumes it's the first tab. 
+    # It's safer to open by name if possible.
+    portfolio_sheet = spreadsheet.worksheet("Portfolio") # <-- Best Practice: Use the sheet name
 
+    # Assign the 'Turnover' sheet
+    turnover_sheet = spreadsheet.worksheet("Turnover")
+    # --- END UPDATE ---
+
+    logging.info("Successfully connected to Google Sheets and loaded worksheets.")
+
+except gspread.exceptions.WorksheetNotFound as e:
+    logging.error(f"FATAL: A required worksheet was not found: {e}")
 except Exception as e:
-    logging.error(f"FATAL: Could not connect to Google Sheets. The application may not function correctly. Details: {e}")
+    logging.error(f"FATAL: Could not connect to Google Sheets. Details: {e}")
