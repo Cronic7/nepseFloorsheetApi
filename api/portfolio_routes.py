@@ -9,7 +9,7 @@ from datetime import date
 
 # --- CORRECTED IMPORT ---
 # Import the new, correct variable names from your client file
-from gspread_client import portfolio_sheet, turnover_sheet, daily_data_sheet
+from gspread_client import portfolio_sheet, turnover_sheet, daily_data_sheet , watchlist_sheet
 
 # Create a Blueprint
 portfolio_bp = Blueprint('portfolio_bp', __name__)
@@ -70,7 +70,7 @@ def scrape_share_prices():
             row_dict = dict(zip(header, cols))
             all_rows.append(row_dict)
         return all_rows
-        print (all_rows)
+       
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Failed to retrieve data from website: {e}")
     except ValueError as e:
@@ -186,6 +186,97 @@ def get_portfolio():
     except Exception as e:
         logging.error(f"Error fetching from Google Sheets: {e}")
         return jsonify({"error": "An error occurred while fetching the portfolio."}), 500
+
+
+#put watchlist
+
+@portfolio_bp.route('/wishlist/add', methods=['PUT'])
+def add_to_wishlist():
+    """
+    Adds a stock scrip to the wishlist sheet.
+    Returns an error if the scrip already exists.
+    """
+    try:
+        # Check if the 'watchlist_sheet' is connected
+        if watchlist_sheet is None:
+            return jsonify({"error": "Google Sheets 'Watchlist' not connected."}), 500
+
+        data = request.get_json()
+
+        # Validate that the 'scrip' field is in the request body
+        if 'scrip' not in data:
+            return jsonify({"error": "Missing required field: 'scrip'"}), 400
+        
+        scrip_to_add = data['scrip']
+
+        # --- NEW: Check if the scrip already exists ---
+        # This assumes scrips are in the first column (A)
+        existing_cell = watchlist_sheet.find(scrip_to_add, in_column=1)
+        if existing_cell:
+            return jsonify({"error": f"Scrip '{scrip_to_add}' already exists in wishlist."}), 409 # 409 Conflict
+
+        # If it doesn't exist, prepare the new row
+        new_row = [scrip_to_add]
+        
+        # Append the new row to the watchlist sheet
+        watchlist_sheet.append_row(new_row, value_input_option='USER_ENTERED')
+        
+        return jsonify({"message": "Scrip added to wishlist successfully."}), 201
+        
+    except Exception as e:
+        logging.error(f"Error adding to wishlist: {e}")
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+    
+# Delete Watchlist
+@portfolio_bp.route('/wishlist/remove', methods=['DELETE'])
+def remove_from_wishlist():
+    """Removes a stock scrip from the wishlist sheet."""
+    try:
+        # Check if the 'watchlist_sheet' is connected
+        if watchlist_sheet is None:
+            return jsonify({"error": "Google Sheets 'Watchlist' not connected."}), 500
+
+        data = request.get_json()
+
+        # Validate that the 'scrip' field is in the request body
+        if 'scrip' not in data:
+            return jsonify({"error": "Missing required field: 'scrip'"}), 400
+            
+        scrip_to_delete = data['scrip']
+
+        # Find the cell with the matching scrip
+        # This assumes scrips are in the first column (A)
+        cell_to_delete = watchlist_sheet.find(scrip_to_delete, in_column=1)
+        
+        if cell_to_delete:
+            # If found, delete the entire row
+            watchlist_sheet.delete_rows(cell_to_delete.row)
+            return jsonify({"message": f"Scrip '{scrip_to_delete}' removed from wishlist."}), 200
+        else:
+            # If not found, return a 404 error
+            return jsonify({"error": f"Scrip '{scrip_to_delete}' not found in wishlist."}), 404
+            
+    except Exception as e:
+        logging.error(f"Error removing from wishlist: {e}")
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+    
+# Get watchlist
+@portfolio_bp.route('/wishlist', methods=['GET'])
+def get_wishlist():
+    """Fetches all scrips from the wishlist sheet."""
+    try:
+        # Check if the 'watchlist_sheet' is connected
+        if watchlist_sheet is None:
+            return jsonify({"error": "Google Sheets 'Watchlist' not connected."}), 500
+
+        # Fetch all records from the sheet
+        records = watchlist_sheet.get_all_records()
+        
+        return jsonify(records), 200
+            
+    except Exception as e:
+        logging.error(f"Error fetching wishlist: {e}")
+        return jsonify({"error": f"An unexpected error occurred while fetching the wishlist: {e}"}), 500
 
 @portfolio_bp.route('/add', methods=['POST'])
 def add_stock():
