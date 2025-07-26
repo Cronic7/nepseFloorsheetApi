@@ -5,10 +5,11 @@ import logging
 import os
 import requests
 from bs4 import BeautifulSoup
+from datetime import date 
 
 # --- CORRECTED IMPORT ---
 # Import the new, correct variable names from your client file
-from gspread_client import portfolio_sheet, turnover_sheet
+from gspread_client import portfolio_sheet, turnover_sheet, daily_data_sheet
 
 # Create a Blueprint
 portfolio_bp = Blueprint('portfolio_bp', __name__)
@@ -69,12 +70,61 @@ def scrape_share_prices():
             row_dict = dict(zip(header, cols))
             all_rows.append(row_dict)
         return all_rows
+        print (all_rows)
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Failed to retrieve data from website: {e}")
     except ValueError as e:
         raise ValueError(f"Error processing HTML content: {e}")
 
 # --- UPDATED ROUTES ---
+
+def save_full_daily_snapshot(all_share_data):
+    """
+    Appends a full snapshot of the day's share data to the DailyMarketData sheet.
+    Checks for the date to avoid saving duplicate data for the same day.
+    """
+    if daily_data_sheet is None:
+        logging.error("Google Sheets 'DailyMarketData' not connected. Cannot save full snapshot.")
+        return
+
+    if not all_share_data:
+        logging.warning("No share data provided to save_full_daily_snapshot.")
+        return
+        
+    try:
+        today_str = date.today().isoformat()
+
+        # --- NEW: Check if data for today already exists ---
+        # This prevents adding duplicate data if the script is run multiple times a day.
+        # It checks the first column ('Date') for today's date.
+        cell = daily_data_sheet.find(today_str, in_column=1)
+        if cell:
+            logging.info(f"Full market snapshot for {today_str} already exists. Skipping save.")
+            return
+
+        # Define headers in the correct order, with 'Date' first.
+        headers = [
+            'Date', 'S.No', 'Symbol', 'Conf.', 'Open', 'High', 'Low', 'Close', 
+            'LTP', 'Close - LTP', 'Close - LTP %', 'VWAP', 'Vol', 'Prev. Close', 
+            'Turnover', 'Trans.', 'Diff', 'Range', 'Diff %', 'Range %', 'VWAP %', 
+            '120 Days', '180 Days', '52 Weeks High', '52 Weeks Low'
+        ]
+        
+        # Prepare all rows for a single batch update
+        rows_to_add = []
+        for record in all_share_data:
+            # Create a list of values for the current record, starting with the date
+            # Note: We skip the first header ('Date') when mapping record values
+            row_values = [today_str] + [record.get(h, "N/A") for h in headers[1:]]
+            rows_to_add.append(row_values)
+            
+        if rows_to_add:
+            # --- MODIFIED: Use append_rows without clearing the sheet ---
+            daily_data_sheet.append_rows(rows_to_add, value_input_option='USER_ENTERED')
+            logging.info(f"Successfully APPENDED full market snapshot with {len(all_share_data)} records for {today_str}.")
+
+    except Exception as e:
+        logging.error(f"Failed to save and append full daily snapshot to Google Sheets: {e}")
 
 @portfolio_bp.route('/market-summary', methods=['GET'])
 def get_market_summary():
@@ -105,11 +155,18 @@ def get_market_summary():
 
 @portfolio_bp.route('/prices', methods=['GET'])
 def get_share_prices():
-    # ... (this function does not use gspread, no changes needed)
+    """
+    Fetches live prices AND triggers the save to Google Sheets.
+    """
     try:
         data = scrape_share_prices()
         if not data:
             return jsonify({"error": "No data found on the page."}), 404
+
+        # --- FIX: Call the save function here ---
+        # This line was missing. It tells the app to save the data it just scraped.
+        save_full_daily_snapshot(data)
+
         return jsonify(data)
     except (ConnectionError, ValueError) as e:
         return jsonify({"error": str(e)}), 500
@@ -164,6 +221,7 @@ def get_portfolio_summary():
         # **FIX**: Use portfolio_sheet instead of worksheet
         portfolio_holdings = portfolio_sheet.get_all_records()
         market_data_list = scrape_share_prices()
+        save_full_daily_snapshot(market_data_list)
         market_prices = {item['Symbol']: item for item in market_data_list}
         
         # ... (rest of the summary logic is correct)

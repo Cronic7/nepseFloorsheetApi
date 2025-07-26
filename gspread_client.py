@@ -11,6 +11,7 @@ load_dotenv()
 # Initialize worksheet variables to None
 portfolio_sheet = None
 turnover_sheet = None
+daily_data_sheet = None
 
 try:
     creds_json_str = os.getenv("GOOGLE_CREDENTIAL")
@@ -32,6 +33,7 @@ try:
     # Assign the 'Turnover' sheet
     turnover_sheet = spreadsheet.worksheet("Turnover")
     # --- END UPDATE ---
+    daily_data_sheet = spreadsheet.worksheet("Market")
 
     logging.info("Successfully connected to Google Sheets and loaded worksheets.")
 
