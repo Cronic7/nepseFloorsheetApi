@@ -9,7 +9,7 @@ from datetime import date
 
 # --- CORRECTED IMPORT ---
 # Import the new, correct variable names from your client file
-from gspread_client import portfolio_sheet, turnover_sheet, daily_data_sheet , watchlist_sheet
+from gspread_client import portfolio_sheet, turnover_sheet, daily_data_sheet , watchlist_sheet, realized_gains_sheet
 
 # Create a Blueprint
 portfolio_bp = Blueprint('portfolio_bp', __name__)
@@ -362,3 +362,75 @@ def get_portfolio_summary():
     except Exception as e:
         logging.error(f"Error creating portfolio summary: {e}")
         return jsonify({"error": f"An unexpected error occurred while generating summary: {e}"}), 500
+
+# 
+
+@portfolio_bp.route('/realized-gain', methods=['PATCH'])
+def add_realized_gain():
+    """
+    Adds or updates a realized gain (sale of stock) in the Realized Gains sheet.
+    Uses 'scrip' as a unique identifier for update.
+    Expects: scrip, quantity, purchase_price, sell_price, sell_date
+    """
+    try:
+        if realized_gains_sheet is None:
+            return jsonify({"error": "Google Sheets 'Realized Gains' not connected."}), 500
+
+        data = request.get_json()
+        required_fields = ['scrip', 'quantity', 'purchase_price', 'sell_price', 'sell_date']
+        if not all(field in data for field in required_fields):
+            return jsonify({"error": f"Missing required fields: {required_fields}"}), 400
+
+        scrip = data['scrip']
+        quantity = float(data['quantity'])
+        purchase_price = float(data['purchase_price'])
+        sell_price = float(data['sell_price'])
+        sell_date = data['sell_date']
+
+        purchase_value = purchase_price * quantity
+        sell_value = sell_price * quantity
+        gain_amount = sell_value - purchase_value
+        gain_percent = (gain_amount / purchase_value * 100) if purchase_value else 0
+
+        new_row = [
+            sell_date,                # Date
+            scrip,                    # Scrip
+            quantity,                 # Quantity Sold
+            purchase_price,           # Purchase Price
+            sell_price,               # Sell Price
+            round(purchase_value, 2), # Purchase Value
+            round(sell_value, 2),     # Sell Value
+            round(gain_amount, 2),    # Gain Amount
+            f"{round(gain_percent, 2)}%" # Gain %
+        ]
+
+        # Try to find the row with the matching scrip (assume Scrip is in column 2)
+        cell = realized_gains_sheet.find(scrip, in_column=2)
+        if cell:
+            # Update the entire row with new data
+            realized_gains_sheet.update(f"A{cell.row}:I{cell.row}", [new_row])
+            return jsonify({"message": f"Realized gain for '{scrip}' updated successfully."}), 200
+        else:
+            # Append as new row if not found
+            realized_gains_sheet.append_row(new_row, value_input_option='USER_ENTERED')
+            return jsonify({"message": "Realized gain recorded successfully."}), 201
+
+    except Exception as e:
+        logging.error(f"Error recording realized gain: {e}")
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+@portfolio_bp.route('/realized-gain', methods=['GET'])
+def get_realized_gains():
+    """
+    Fetches all realized gain records from the Realized Gains sheet.
+    """
+    try:
+        if realized_gains_sheet is None:
+            return jsonify({"error": "Google Sheets 'Realized Gains' not connected."}), 500
+
+        records = realized_gains_sheet.get_all_records()
+        return jsonify(records), 200
+
+    except Exception as e:
+        logging.error(f"Error fetching realized gains: {e}")
+        return jsonify({"error": f"An unexpected error occurred while fetching realized gains: {e}"}), 500

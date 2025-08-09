@@ -13,6 +13,7 @@ portfolio_sheet = None
 turnover_sheet = None
 daily_data_sheet = None
 watchlist_sheets=None
+realized_gains_sheet = None
 
 try:
     creds_json_str = os.getenv("GOOGLE_CREDENTIAL")
@@ -36,6 +37,7 @@ try:
     # --- END UPDATE ---
     daily_data_sheet = spreadsheet.worksheet("Market")
     watchlist_sheet = spreadsheet.worksheet("Watchlist")
+    realized_gains_sheet  = spreadsheet.worksheet("Realized Gains")
 
     logging.info("Successfully connected to Google Sheets and loaded worksheets.")
 
